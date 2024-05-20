@@ -1,0 +1,79 @@
+`timescale 1ns / 1ps
+
+module axi_stream_insert_header #(
+    parameter DATA_WD = 32,
+    parameter DATA_BYTE_WD = DATA_WD / 8,
+    parameter BYTE_CNT_WD = $clog2(DATA_BYTE_WD)
+) (
+    input clk,
+    input rst_n,
+    // AXI Stream input original data
+    input valid_in,
+    input [DATA_WD-1 : 0] data_in,
+    input [DATA_BYTE_WD-1 : 0] keep_in,
+    input last_in,
+    input ready_in,
+    // AXI Stream output with header inserted
+    output valid_out,
+    output [DATA_WD-1 : 0] data_out,
+    output [DATA_BYTE_WD-1 : 0] keep_out,
+    output last_out,
+    input ready_out,
+    // The header to be inserted to AXI Stream input
+    input valid_insert,
+    input [DATA_WD-1 : 0] data_insert,
+    input [DATA_BYTE_WD-1 : 0] keep_insert,
+    input [BYTE_CNT_WD-1 : 0] byte_insert_cnt,
+    input ready_insert
+);
+
+    reg [DATA_WD-1 : 0] data_out_reg; // 输出数据寄存器
+    reg [DATA_BYTE_WD-1 : 0] keep_out_reg; // 输出数据的有效字节寄存器
+    reg last_out_reg; // 输出数据的最后一拍标志寄存器
+    reg [DATA_BYTE_WD-1 : 0] byte_cnt_reg; // 已经插入了多少个字节的header
+    reg [DATA_BYTE_WD-1 : 0] byte_cnt_insert; // 当前插入的header的有效字节数
+
+    always @(posedge clk or negedge rst_n) begin
+        if (~rst_n) begin
+            data_out_reg <= 0;
+            keep_out_reg <= 0;
+            last_out_reg <= 1'b0;
+            byte_cnt_reg <= 0;
+        end else begin
+            if (valid_in && ready_out) begin // 输入数据有效且输出端已经准备好
+                if (byte_cnt_reg < byte_insert_cnt) begin // 还没有插入完整个header
+                    if (valid_insert && ready_in) begin // header输入有效且输入端已经准备好
+                        byte_cnt_insert <= keep_insert & ((1 << byte_cnt_reg) - 1); // 计算当前插入的header的有效字节数
+                        if (byte_cnt_reg + byte_cnt_insert <= byte_insert_cnt) begin // header可以完整插入
+                            data_out_reg <= {data_insert[byte_cnt_reg * 8 +: 8], data_in}; // 插入header
+                            keep_out_reg <= {keep_insert[byte_cnt_reg +: 0], keep_in}; // 更新输出数据的有效字节
+                            byte_cnt_reg <= byte_cnt_reg + byte_cnt_insert; // 更新已经插入的header字节数
+                        end else begin // header不能完整插入
+                            data_out_reg <= {data_insert[byte_cnt_reg * 8 +: 8], data_in}; // 插入部分header
+                            keep_out_reg <= {keep_insert[byte_cnt_reg +: 0], keep_in}; // 更新输出数据的有效字节
+                            byte_cnt_reg <= byte_insert_cnt; // 更新已经插入的header字节数
+                        end
+                    end else begin // header输入无效或输入端未准备好
+                        data_out_reg <= data_in; // 直接输出原始数据
+                        keep_out_reg <= keep_in; // 更新输出数据的有效字节
+                    end
+                end else begin // header已经插入完毕
+                    data_out_reg <= data_in; // 直接输出原始数据
+                    keep_out_reg <= keep_in; // 更新输出数据的有效字节
+                end
+                last_out_reg <= last_in; // 更新输出数据的最后一拍标志
+            end else begin // 输入数据无效或输出端未准备好
+                data_out_reg <= 0; // 输出0
+                keep_out_reg <= 0; // 输出0
+                last_out_reg <= 1'b0; // 输出0
+                byte_cnt_reg <= 0; // 重置已经插入的header字节数
+            end
+        end
+    end
+
+    assign valid_out = valid_in; // 直接输出输入数据的valid信号
+    assign data_out = data_out_reg; // 输出数据
+    assign keep_out = keep_out_reg; // 输出数据的有效字节
+    assign last_out = last_out_reg; // 输出数据的最后一拍标志
+
+endmodule
